@@ -26,4 +26,4 @@ private:
     std::mutex clients_mutex;
 };
 
-#endif // SERVER_H
+#endif

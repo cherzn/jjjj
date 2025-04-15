@@ -25,4 +25,4 @@ private:
 
 size_t utf8_length(const std::string &str);
 
-#endif // CLIENT_H
+#endif

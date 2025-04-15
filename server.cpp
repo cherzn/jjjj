@@ -47,7 +47,7 @@ void handle_client(int client_socket) {
 
         std::string message = std::string(buffer, bytes_received);
         std::cout << name << ": " << message << std::endl; // Выводим сообщение на сервере
-        broadcast_message(name + ": " + message, client_socket);
+        broadcast_message( message, client_socket);
     }
 
     close(client_socket);
