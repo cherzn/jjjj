@@ -6,10 +6,11 @@
 #include <vector>
 #include <thread>
 #include <mutex>
-#include <netinet/in.h> // Для sockaddr_in
+#include <netinet/in.h>
 
 #define PORT 8080
 #define BUFFER_SIZE 1024
+
 
 class Server {
 public:

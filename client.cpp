@@ -14,79 +14,61 @@ std::string name;
 std::string encryption_key; // Кодировочное слово
 const std::string delimiter = "|"; // Используем разделитель
 
+
+// Предполагается, что utf8_length корректно считает количество символов UTF-8
 size_t utf8_length(const std::string &str) {
     size_t length = 0;
-    for (size_t i = 0; i < str.length(); ++i) {
-        if ((str[i] & 0x80) == 0) {
-            length++;
-        } else if ((str[i] & 0xE0) == 0xC0) {
-            length++;
-            i++;
-        } else if ((str[i] & 0xF0) == 0xE0) {
-            length++;
-            i += 2;
-        } else if ((str[i] & 0xF8) == 0xF0) {
-            length++;
-            i += 3;
-        }
+    for (size_t i = 0; i < str.size(); ) {
+        unsigned char c = str[i];
+        if (c <= 0x7F) { i += 1; }
+        else if ((c & 0xE0) == 0xC0) { i += 2; }
+        else if ((c & 0xF0) == 0xE0) { i += 3; }
+        else if ((c & 0xF8) == 0xF0) { i += 4; }
+        else { i += 1; } // Некорректный UTF-8, пропускаем 1 байт
+        length++;
     }
     return length;
 }
 
 std::string encrypt_message(std::string message, const std::string &kode) {
     size_t cols = utf8_length(kode);
+    if (cols == 0) return ""; // На случай пустого кода
+
     size_t message_length = utf8_length(message);
-    size_t total_length = cols * 4; // Общая длина, которую нужно получить в матрице
+    size_t rows = (message_length + cols - 1) / cols; // Округление вверх
 
-    // Проверяем, нужно ли добавлять '*' к сообщению
-    if (message_length < total_length) {
-        size_t stars_to_add = total_length - message_length;
-        message.append(stars_to_add, '*'); // Добавляем '*' до достижения нужной длины
-    }
+    // Вместо матрицы char[100][401] используем vector<vector<string>> для хранения символов
+    std::vector<std::vector<std::string> > matrix(rows, std::vector<std::string>(cols, "*"));
 
-    size_t rows = (message.length() / cols) + (message.length() % cols == 0 ? 0 : 1);
-
-    char matrix[100][401] = {};
-    size_t index = 0;
-
-    // Заполнение матрицы
+    // Заполнение матрицы символами (каждый символ UTF-8 хранится как строка)
+    size_t current_pos = 0;
     for (size_t i = 0; i < rows; ++i) {
         for (size_t j = 0; j < cols; ++j) {
-            if (index < message.length()) {
-                size_t char_length = 1;
-                if ((message[index] & 0x80) == 0) {
-                    char_length = 1;
-                } else if ((message[index] & 0xE0) == 0xC0) {
-                    char_length = 2;
-                } else if ((message[index] & 0xF0) == 0xE0) {
-                    char_length = 3;
-                } else if ((message[index] & 0xF8) == 0xF0) {
-                    char_length = 4;
-                }
+            if (current_pos >= message.size()) break;
 
-                for (size_t k = 0; k < char_length; ++k) {
-                    if (index + k < message.length()) {
-                        char c = message[index + k];
-                        if (c == ' '){matrix[i][j * 4 + k] = '*';}
-                        else{matrix[i][j * 4 + k] = c;} // Оставляем все символы неизменными
+            // Определяем длину текущего символа UTF-8
+            unsigned char c = message[current_pos];
+            size_t char_len = 1;
+            if ((c & 0xE0) == 0xC0) { char_len = 2; }
+            else if ((c & 0xF0) == 0xE0) { char_len = 3; }
+            else if ((c & 0xF8) == 0xF0) { char_len = 4; }
 
-                    }
-                }
-                index += char_length;
+            // Извлекаем символ
+            std::string symbol = message.substr(current_pos, char_len);
+            if (symbol == " ") {
+                matrix[i][j] = "*";
+            } else {
+                matrix[i][j] = symbol;
             }
+            current_pos += char_len;
         }
     }
 
+    // Чтение матрицы по столбцам
     std::string encrypted_message;
-
-    // Формирование зашифрованного сообщения
     for (size_t j = 0; j < cols; ++j) {
         for (size_t i = 0; i < rows; ++i) {
-            for (size_t k = 0; k < 4; ++k) {
-                if (matrix[i][j * 4 + k] != 0) {
-                    encrypted_message += matrix[i][j * 4 + k];
-                }
-            }
+            encrypted_message += matrix[i][j];
         }
     }
 
@@ -94,62 +76,50 @@ std::string encrypt_message(std::string message, const std::string &kode) {
 }
 std::string decrypt_message(const std::string &buffer, const std::string &kode) {
     size_t cols = utf8_length(kode);
-    size_t buffer_length = utf8_length(buffer);
-    size_t rows = (buffer_length + cols - 1) / cols; // Правильный расчет количества строк
+    if (cols == 0) return buffer;
 
-    std::vector<std::string> matrix(rows, std::string(cols * 4, ' ')); // Создаем матрицу
+    size_t total_chars = utf8_length(buffer);
+    size_t rows = (total_chars) / cols;
 
-    size_t index2 = 0;
+    // Создаем матрицу для хранения символов
+    std::vector<std::vector<std::string> > matrix(rows, std::vector<std::string>(cols));
 
-    // Заполняем матрицу по столбцам
+    // Заполняем матрицу по колонкам (как при шифровании)
+    size_t buf_pos = 0;
     for (size_t j = 0; j < cols; ++j) {
         for (size_t i = 0; i < rows; ++i) {
-            if (index2 < buffer.size()) {
-                size_t char_length = 1;
-                if ((buffer[index2] & 0x80) == 0) {
-                    char_length = 1;
-                } else if ((buffer[index2] & 0xE0) == 0xC0) {
-                    char_length = 2;
-                } else if ((buffer[index2] & 0xF0) == 0xE0) {
-                    char_length = 3;
-                } else if ((buffer[index2] & 0xF8) == 0xF0) {
-                    char_length = 4;
-                }
 
-                // Заполняем строку
-                for (size_t k = 0; k < char_length; ++k) {
-                    if (index2 + k < buffer.size()) {
-                        matrix[i][j * 4 + k] = buffer[index2 + k];
-                    }
-                }
-                index2 += char_length; // Переход к следующему символу
-            }
+            unsigned char c = buffer[buf_pos];
+            size_t char_len = 1;
+            if ((c & 0xE0) == 0xC0) char_len = 2;
+            else if ((c & 0xF0) == 0xE0) char_len = 3;
+            else if ((c & 0xF8) == 0xF0) char_len = 4;
+
+            // Извлекаем символ
+            matrix[i][j] = buffer.substr(buf_pos, char_len);
+            if (matrix[i][j] == "*") matrix[i][j] = " "; // Заменяем * на пробелы
+            buf_pos += char_len;
         }
     }
 
-    std::string decrypted_message;
-
-    // Извлекаем сообщения из матрицы по строкам
+    // Читаем матрицу по строкам
+    std::string result;
     for (size_t i = 0; i < rows; ++i) {
         for (size_t j = 0; j < cols; ++j) {
-            for (size_t k = 0; k < 4; ++k) {
-                char current_char = matrix[i][j * 4 + k];
-
-                // Включаем* — считываем пробелы в декодированный текст
-                if (current_char == '*') {
-                    decrypted_message += ' '; // Заменяем '*' на пробел
-                } else if (current_char != ' ' && current_char != 0) {
-                    decrypted_message += current_char; // Добавляем текущий символ
-                }
-            }
+            result += matrix[i][j];
         }
     }
 
+    // Удаляем лишние пробелы в конце (которые были *)
+    size_t end = result.find_last_not_of(" ");
+    if (end != std::string::npos) {
+        result = result.substr(0, end + 1);
+    }
 
-    return decrypted_message;
+    return result;
 }
 void receive_messages(int client_socket) {
-    char buffer[1024];
+    char buffer[4096];
     while (running) {
         memset(buffer, 0, sizeof(buffer));
         int bytes_received = recv(client_socket, buffer, sizeof(buffer), 0);
@@ -161,40 +131,49 @@ void receive_messages(int client_socket) {
 
         std::string received_message(buffer, bytes_received);
 
-        // Проверяем, является ли сообщение именем клиента
+
+        if (received_message.find("подключился") != std::string::npos ||
+            received_message.find("покинул") != std::string::npos ||
+            received_message.find("отключен") != std::string::npos) {
+            std::cout << received_message;
+            continue;
+        }
+
         if (received_message == name) {
-            // Игнорируем имя, если пришло еще раз
             continue;
         }
 
         if (received_message.find(delimiter) != std::string::npos) {
-            // Извлекаем имя отправителя и зашифрованное сообщение
             std::string sender_name = received_message.substr(0, received_message.find(delimiter));
             std::string enc_message = received_message.substr(received_message.find(delimiter) + 1);
             std::string decrypted_message = decrypt_message(enc_message, encryption_key);
 
-            // Убедитесь, что имя отправителя не совпадает с именем клиента
             if (sender_name != name && !decrypted_message.empty()) {
-                // Здесь измените вывод, чтобы не включать имя отправителя дважды.
-                std::cout << sender_name << ": " << decrypted_message << std::endl;
+                std::cout << sender_name << ": "<< decrypted_message << std::endl;
             }
+        } else {
+            std::cout << received_message;
         }
     }
 }
 
 void send_messages(int client_socket) {
-    char message[1024];
+    std::string message;
     while (running) {
-        std::cin.getline(message, sizeof(message));
+        std::getline(std::cin, message);
 
-        if (strcmp(message, "exit") == 0) {
-            running = false; // Завершаем программу
+        if (message == "exit") {
+            running = false;
             break;
         }
 
-        // Конструируем сообщение, включая имя отправителя
-        std::string full_message = name + delimiter + encrypt_message(message, encryption_key);
-        // Отправляем сообщение на сервер
+        std::string full_message;
+        if (name == "admin" && (message.substr(0, 6) == "/kick " || message == "/list")) {
+            full_message = message;
+        } else {
+            full_message = name + delimiter + encrypt_message(message, encryption_key);
+        }
+
         send(client_socket, full_message.c_str(), full_message.size(), 0);
     }
 }
@@ -221,19 +200,31 @@ int main() {
     char buffer[1024];
     memset(buffer, 0, sizeof(buffer));
     recv(client_socket, buffer, sizeof(buffer), 0);
-    std::cout << buffer; // Выводим запрос на экран
+    std::cout << buffer;
 
-    std::getline(std::cin, name); // Ввод имени клиента
-    // Отправляем имя без шифрования
+    std::getline(std::cin, name);
     send(client_socket, name.c_str(), name.size(), 0);
 
+    if (name == "admin") {
+        std::string password;
+
+        std::getline(std::cin, password);
+        send(client_socket, password.c_str(), password.size(), 0);
+
+        memset(buffer, 0, sizeof(buffer));
+        recv(client_socket, buffer, sizeof(buffer), 0);
+        std::cout << buffer;
+
+        if (strstr(buffer, "Неверный") != nullptr) {
+            close(client_socket);
+            return 0;
+        }
+    }
+
     std::cout << "Введите код шифрования (русские буквы): ";
-    std::getline(std::cin, encryption_key); // Ввод кодировочного слова
+    std::getline(std::cin, encryption_key);
 
-    // Запускаем поток для получения сообщений
     std::thread(receive_messages, client_socket).detach();
-
-    // Запускаем поток для отправки сообщений
     send_messages(client_socket);
 
     close(client_socket);
