@@ -1,30 +1,32 @@
-#ifndef SERVER_H
-#define SERVER_H
+#ifndef SERVER_HPP
+#define SERVER_HPP
 
-#include <iostream>
-#include <cstring>
 #include <vector>
-#include <thread>
+#include <string>
 #include <mutex>
-#include <netinet/in.h>
-
-#define PORT 8080
-#define BUFFER_SIZE 1024
-
+#include <unordered_map>
 
 class Server {
 public:
     Server();
+    ~Server();
+
     void start();
 
 private:
-    void handle_client(int client_sock);
-    void broadcast_message(const char* message, size_t length);
+    static const int PORT = 8080;
+    static const std::string ADMIN_PASSWORD;
 
-    int server_fd;
-    struct sockaddr_in address;
+    int server_socket;
     std::vector<int> clients;
+    std::vector<std::string> client_names;
     std::mutex clients_mutex;
+    std::unordered_map<int, bool> admin_sockets;
+
+    void broadcast(const std::string& message, int sender_socket);
+    std::string decryptMessage(const std::string& encrypted, const std::string& key);
+    void sendClientList(int admin_socket);
+    void handleClient(int client_socket);
 };
 
-#endif
+#endif // SERVER_HPP

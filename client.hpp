@@ -1,28 +1,24 @@
-#ifndef CLIENT_H
-#define CLIENT_H
+#ifndef CLIENT_HPP
+#define CLIENT_HPP
 
-#include <iostream>
-#include <cstring>
-#include <cstdlib>
-#include <thread>
-#include <arpa/inet.h> // Для inet_pton
-#include <unistd.h> // Для close()
-
-#define BUFFER_SIZE 1024
+#include <atomic>
+#include <string>
 
 class Client {
+    int client_socket;
+    std::string name;
+    std::string encryption_key;
+    std::atomic<bool> running;
+
+    void receiveMessages();
+    void sendMessages();
+
 public:
-    Client(const std::string& server_ip, int port);
-    void start();
+    Client();
+    ~Client();
 
-private:
-    void sendMessage();
-    void receiveMessage();
-
-    int client_fd;
-    struct sockaddr_in address;
+    void connectToServer(const std::string &ip);
+    void run();
 };
-
-size_t utf8_length(const std::string &str);
 
 #endif
