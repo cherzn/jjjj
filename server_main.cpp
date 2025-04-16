@@ -1,12 +1,11 @@
 #include "server.hpp"
 #include <iostream>
-#include <stdexcept>
 
 int main() {
     try {
         Server server;
         server.start();
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         std::cerr << "Ошибка сервера: " << e.what() << std::endl;
         return 1;
     }

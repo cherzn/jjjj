@@ -5,6 +5,7 @@
 #include <string>
 #include <mutex>
 #include <unordered_map>
+#include <memory>
 
 class Server {
 public:
@@ -27,6 +28,7 @@ private:
     std::string decryptMessage(const std::string& encrypted, const std::string& key);
     void sendClientList(int admin_socket);
     void handleClient(int client_socket);
+    void removeClient(int client_socket);
 };
 
 #endif // SERVER_HPP

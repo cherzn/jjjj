@@ -5,20 +5,41 @@
 #include <arpa/inet.h>
 #include <algorithm>
 #include <thread>
+#include <vector>
 
 const std::string Server::ADMIN_PASSWORD = "admin123";
 
 Server::Server() : server_socket(-1) {}
 
 Server::~Server() {
-    if (server_socket != -1) close(server_socket);
+    if (server_socket != -1) {
+        close(server_socket);
+    }
 }
 
 void Server::broadcast(const std::string& message, int sender_socket) {
     std::lock_guard<std::mutex> lock(clients_mutex);
+
+    // Удаляем все закрытые сокеты перед рассылкой
+    for (size_t i = 0; i < clients.size(); ) {
+        if (clients[i] == -1) {
+            clients.erase(clients.begin() + i);
+            client_names.erase(client_names.begin() + i);
+        } else {
+            i++;
+        }
+    }
+
     for (int client : clients) {
         if (client != sender_socket && client != -1) {
-            send(client, message.c_str(), message.size(), 0);
+            if (send(client, message.c_str(), message.size(), 0) <= 0) {
+                // Если отправка не удалась, помечаем сокет для удаления
+                auto it = std::find(clients.begin(), clients.end(), client);
+                if (it != clients.end()) {
+                    size_t index = it - clients.begin();
+                    clients[index] = -1;
+                }
+            }
         }
     }
 }
@@ -34,11 +55,32 @@ std::string Server::decryptMessage(const std::string& encrypted, const std::stri
 
 void Server::sendClientList(int admin_socket) {
     std::lock_guard<std::mutex> lock(clients_mutex);
-    std::string list = "Список клиентов (" + std::to_string(client_names.size()) + "):\n";
-    for (size_t i = 0; i < client_names.size(); ++i) {
-        list += "- " + client_names[i] + (admin_sockets.count(clients[i]) ? " (admin)" : "") + "\n";
+    std::string list = "Список клиентов (" + std::to_string(clients.size()) + "):\n";
+    for (size_t i = 0; i < clients.size(); ++i) {
+        if (clients[i] != -1) {
+            list += "- " + client_names[i] + (admin_sockets.count(clients[i]) ? " (admin)" : "") + "\n";
+        }
     }
     send(admin_socket, list.c_str(), list.size(), 0);
+}
+
+void Server::removeClient(int client_socket) {
+    std::lock_guard<std::mutex> lock(clients_mutex);
+    auto it = std::find(clients.begin(), clients.end(), client_socket);
+    if (it != clients.end()) {
+        size_t index = it - clients.begin();
+        std::string name = client_names[index];
+        clients.erase(it);
+        client_names.erase(client_names.begin() + index);
+        admin_sockets.erase(client_socket);
+
+        if (client_socket != -1) {
+            close(client_socket);
+        }
+
+        std::cout << name << " отключен." << std::endl;
+        broadcast(name + " покинул чат.\n", -1);
+    }
 }
 
 void Server::handleClient(int client_socket) {
@@ -51,7 +93,7 @@ void Server::handleClient(int client_socket) {
     memset(buffer, 0, sizeof(buffer));
     int bytes = recv(client_socket, buffer, sizeof(buffer), 0);
     if (bytes <= 0) {
-        close(client_socket);
+        removeClient(client_socket);
         return;
     }
     name = std::string(buffer, bytes);
@@ -61,7 +103,7 @@ void Server::handleClient(int client_socket) {
         memset(buffer, 0, sizeof(buffer));
         bytes = recv(client_socket, buffer, sizeof(buffer), 0);
         if (bytes <= 0) {
-            close(client_socket);
+            removeClient(client_socket);
             return;
         }
         std::string password(buffer, bytes);
@@ -74,7 +116,7 @@ void Server::handleClient(int client_socket) {
         } else {
             const char* msg = "Неверный пароль админа. Отключение.\n";
             send(client_socket, msg, strlen(msg), 0);
-            close(client_socket);
+            removeClient(client_socket);
             return;
         }
     }
@@ -83,7 +125,7 @@ void Server::handleClient(int client_socket) {
     memset(buffer, 0, sizeof(buffer));
     bytes = recv(client_socket, buffer, sizeof(buffer), 0);
     if (bytes <= 0) {
-        close(client_socket);
+        removeClient(client_socket);
         return;
     }
     encryption_key = std::string(buffer, bytes);
@@ -101,7 +143,9 @@ void Server::handleClient(int client_socket) {
     while (true) {
         memset(buffer, 0, sizeof(buffer));
         bytes = recv(client_socket, buffer, sizeof(buffer), 0);
-        if (bytes <= 0) break;
+        if (bytes <= 0) {
+            break;
+        }
 
         std::string message(buffer, bytes);
 
@@ -109,35 +153,27 @@ void Server::handleClient(int client_socket) {
         if (is_admin) {
             if (message.substr(0, 6) == "/kick ") {
                 std::string target_name = message.substr(6);
-                std::lock_guard<std::mutex> lock(clients_mutex);
+                std::vector<int> targets;
 
-                bool found = false;
-                for (size_t i = 0; i < client_names.size(); i++) {
-                    if (client_names[i] == target_name) {
-                        int target_socket = clients[i];
-
-                        // Не даем админу кикнуть самого себя
-                        if (target_socket == client_socket) {
-                            send(client_socket, "Вы не можете отключить себя.\n", 28, 0);
-                            found = true;
-                            break;
+                {
+                    std::lock_guard<std::mutex> lock(clients_mutex);
+                    for (size_t i = 0; i < client_names.size(); ++i) {
+                        if (client_names[i] == target_name && clients[i] != client_socket) {
+                            targets.push_back(clients[i]);
+                            clients[i] = -1;  // Помечаем для удаления
                         }
-
-                        const char* kick_msg = "Вы были отключены админом.\n";
-                        send(target_socket, kick_msg, strlen(kick_msg), 0);
-                        close(target_socket);
-
-                        // Помечаем сокет как закрытый
-                        clients[i] = -1;
-
-                        std::cout << "Админ " << name << " отключил " << target_name << std::endl;
-                        broadcast(target_name + " был отключен админом.\n", client_socket);
-                        found = true;
-                        break;
                     }
                 }
 
-                if (!found) {
+                if (!targets.empty()) {
+                    for (int target : targets) {
+                        const char* kick_msg = "Вы были отключены админом.\n";
+                        send(target, kick_msg, strlen(kick_msg), 0);
+                        close(target);
+                        std::cout << "Админ " << name << " отключил " << target_name << std::endl;
+                    }
+                    broadcast(target_name + " был отключен админом.\n", client_socket);
+                } else {
                     std::string error_msg = "Пользователь '" + target_name + "' не найден.\n";
                     send(client_socket, error_msg.c_str(), error_msg.size(), 0);
                 }
@@ -152,25 +188,10 @@ void Server::handleClient(int client_socket) {
         // Обычное сообщение
         std::string decrypted = decryptMessage(message, encryption_key);
         std::cout << "Получено от " << name << ": " << decrypted << std::endl;
-        broadcast(name + ": " + message, client_socket);
+        broadcast(message, client_socket);
     }
 
-    // Удаляем клиента при отключении
-    close(client_socket);
-    admin_sockets.erase(client_socket);
-
-    {
-        std::lock_guard<std::mutex> lock(clients_mutex);
-        auto it = std::find(clients.begin(), clients.end(), client_socket);
-        if (it != clients.end()) {
-            size_t index = it - clients.begin();
-            std::string disconnected_name = client_names[index];
-            clients.erase(it);
-            client_names.erase(client_names.begin() + index);
-            broadcast(disconnected_name + " покинул чат.\n", -1);
-            std::cout << disconnected_name << " отключился." << std::endl;
-        }
-    }
+    removeClient(client_socket);
 }
 
 void Server::start() {
